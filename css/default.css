@@ -327,3 +327,10 @@ html {
   strong{
     color: #336699;
   }
+
+  /* Support for citations
+  --------------------------------*/
+  .citation {
+    font-size: 90%;
+    color: #888;
+}
