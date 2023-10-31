@@ -43,6 +43,7 @@ packages:
 # extra-deps: []
 extra-deps:
   - hakyll-images-1.2.1
+  - process-1.6.17.0
 
 # Override default flag values for local packages and extra-deps
 # flags: {}

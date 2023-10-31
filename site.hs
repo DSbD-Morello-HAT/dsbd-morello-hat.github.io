@@ -5,6 +5,10 @@ import Hakyll
 import Hakyll.Images ( ensureFitCompiler,loadImage)
 import Text.Pandoc.Highlighting (Style, tango, styleToCss)
 import Text.Pandoc
+import Text.Pandoc.Walk ( walk )
+import System.Process ( readProcess )
+import System.IO.Unsafe ( unsafePerformIO )
+import qualified Data.Text as T
 --------------------------------------------------------------------------------
 
 config :: Configuration
@@ -16,24 +20,52 @@ config =
 pandocCodeStyle :: Style
 pandocCodeStyle = tango
 
+svg :: String -> String
+svg contents = unsafePerformIO $ readProcess "dot" ["-Tsvg"] contents
+
 --------------------------------------------------------------------------------
+graphViz :: Pandoc -> Pandoc
+graphViz = walk codeBlock
+
+codeBlock :: Block -> Block
+codeBlock cb@(CodeBlock (id, classes, namevals) contents) = 
+    case lookup "lang" namevals of
+        Just f -> RawBlock (Format "html") $ T.pack $ svg $ T.unpack contents
+        Nothing -> cb
+codeBlock x = x
+--------------------------------------------------------------------------------
+
+readPandocBiblios' :: ReaderOptions
+                  -> Item CSL
+                  -> [Item Biblio]
+                  -> (Item String)
+                  -> Compiler (Item Pandoc)
+readPandocBiblios' ropt csl biblios item = do
+  pandoc <-readPandocWith ropt item
+  processPandocBiblios csl biblios (fmap graphViz pandoc)
+
+
 pandocCompilerStyled :: String -> String -> Compiler (Item String)
 pandocCompilerStyled cslFileName bibFileName = do
     csl  <- load    $ fromFilePath cslFileName
     bibs <- loadAll $ fromGlob bibFileName
     fmap (writePandocWith wopt)
-        (getResourceBody >>= readPandocBiblios ropt csl bibs)
-    where ropt = defaultHakyllReaderOptions
-            { 
-                readerExtensions = enableExtension Ext_citations $ readerExtensions defaultHakyllReaderOptions
-            }
-          wopt = defaultHakyllWriterOptions
-            {
-                writerHighlightStyle   = Just pandocCodeStyle
-            }
+         (getResourceBody 
+          >>= readPandocBiblios' ropt csl bibs
+         ) 
+    where 
+        ropt = defaultHakyllReaderOptions
+          { 
+              readerExtensions = enableExtension Ext_citations $ readerExtensions defaultHakyllReaderOptions
+          }
+        wopt = defaultHakyllWriterOptions
+          {
+              writerHighlightStyle   = Just pandocCodeStyle
+          }
 
 pandocBibCompiler :: Compiler (Item String)
-pandocBibCompiler = pandocCompilerStyled "style.csl" "bibliography.bib"
+pandocBibCompiler = 
+  pandocCompilerStyled "style.csl" "bibliography.bib" 
 
 main :: IO ()
 main = hakyllWith config $ do
@@ -80,11 +112,11 @@ main = hakyllWith config $ do
   match "posts/*" $ do
     route $ setExtension "html"
     compile $
-      pandocBibCompiler
+      pandocBibCompiler 
         >>= loadAndApplyTemplate "templates/post.html" postCtx
         >>= loadAndApplyTemplate "templates/default.html" postCtx
         >>= relativizeUrls
-
+        
   create ["posts.html"] $ do
     route idRoute
     compile $ do

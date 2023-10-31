@@ -23,6 +23,7 @@ executable dsbd-morello-hat
                        , pandoc
                        , pandoc-types
                        , text 
+                       , process
   ghc-options:         -Wall
                        -Wcompat
                        -Widentities

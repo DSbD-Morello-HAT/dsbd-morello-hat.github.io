@@ -11,6 +11,13 @@ packages:
       size: 1189
   original:
     hackage: hakyll-images-1.2.1
+- completed:
+    hackage: process-1.6.17.0@sha256:49d8a7f372d35363011591b253cae4c8db8b9ec594590448e20b7bed7acaee98,2845
+    pantry-tree:
+      sha256: cfcb73c1a6a3f653f02e838e146d36505c1506d8bf57a4bb306d7ca905110a9e
+      size: 1545
+  original:
+    hackage: process-1.6.17.0
 snapshots:
 - completed:
     sha256: 8017c7970c2a8a9510c60cc70ac245d59e0c34eb932b91d37af09fe59855d854
