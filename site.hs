@@ -9,6 +9,7 @@ import Text.Pandoc.Walk ( walk )
 import System.Process ( readProcess )
 import System.IO.Unsafe ( unsafePerformIO )
 import qualified Data.Text as T
+
 --------------------------------------------------------------------------------
 
 config :: Configuration
@@ -21,14 +22,26 @@ pandocCodeStyle :: Style
 pandocCodeStyle = tango
 
 svg :: String -> String
-svg contents = unsafePerformIO $ readProcess "dot" ["-Tsvg"] contents
+svg contents = unsafePerformIO $ do
+    svgData <- readProcess "dot" ["-Tsvg"] contents
+    let svgText = T.pack svgData
+        -- Remove unwanted lines (XML and DOCTYPE declarations)
+        cleanedSvgText = T.unlines $  filter (not . isUnwantedLine) $  T.lines svgText
+    return $ T.unpack cleanedSvgText
+
+isUnwantedLine :: T.Text -> Bool
+isUnwantedLine line = any (`T.isInfixOf` line) unwantedStrings
+  where
+    unwantedStrings = ["<?xml", "<!DOCTYPE svg", "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd"]
+
+
 
 --------------------------------------------------------------------------------
 graphViz :: Pandoc -> Pandoc
 graphViz = walk codeBlock
 
 codeBlock :: Block -> Block
-codeBlock cb@(CodeBlock (id, classes, namevals) contents) = 
+codeBlock cb@(CodeBlock (id, classes, namevals) contents) =
     case lookup "lang" namevals of
         Just f -> RawBlock (Format "html") $ T.pack $ svg $ T.unpack contents
         Nothing -> cb
@@ -48,14 +61,14 @@ readPandocBiblios' ropt csl biblios item = do
 pandocCompilerStyled :: String -> String -> Compiler (Item String)
 pandocCompilerStyled cslFileName bibFileName = do
     csl  <- load    $ fromFilePath cslFileName
-    bibs <- loadAll $ fromGlob bibFileName
+    bibs <- loadAll $ fromGlob bibFileName 
     fmap (writePandocWith wopt)
-         (getResourceBody 
+         (getResourceBody
           >>= readPandocBiblios' ropt csl bibs
-         ) 
-    where 
+         )
+    where
         ropt = defaultHakyllReaderOptions
-          { 
+          {
               readerExtensions = enableExtension Ext_citations $ readerExtensions defaultHakyllReaderOptions
           }
         wopt = defaultHakyllWriterOptions
@@ -64,8 +77,8 @@ pandocCompilerStyled cslFileName bibFileName = do
           }
 
 pandocBibCompiler :: Compiler (Item String)
-pandocBibCompiler = 
-  pandocCompilerStyled "style.csl" "bibliography.bib" 
+pandocBibCompiler =
+  pandocCompilerStyled "style.csl" "bibliography.bib"
 
 main :: IO ()
 main = hakyllWith config $ do
@@ -112,11 +125,11 @@ main = hakyllWith config $ do
   match "posts/*" $ do
     route $ setExtension "html"
     compile $
-      pandocBibCompiler 
+      pandocBibCompiler
         >>= loadAndApplyTemplate "templates/post.html" postCtx
         >>= loadAndApplyTemplate "templates/default.html" postCtx
         >>= relativizeUrls
-        
+
   create ["posts.html"] $ do
     route idRoute
     compile $ do
