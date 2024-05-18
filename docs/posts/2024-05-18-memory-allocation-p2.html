@@ -1,0 +1,210 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+  <title>DSbD Morello-HAT :: Towards a better memory management API - Part 2</title>
+  <link rel="stylesheet" type="text/css" href="../css/default.css" />
+  <link rel="stylesheet" type="text/css" href="../css/syntax.css" />
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.2/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-Zenh87qX5JnK2Jl0vWa8Ck2rdkQ2Bzep5IDxbcnCeuOxjzrPF/et3URy9Bv1WTRi" crossorigin="anonymous">
+</head>
+
+<body>
+  
+  <header class="d-flex align-items-center nav-bg sticky-top">
+    <nav class="navbar navbar-expand-md navbar-fixed-top navbar-light bg-light nav-menu">
+      <div class="container">
+
+        <div id="logo">
+          <a class="navbar-brand" href="../index.html"> <img src="../images/morello-hat-logo-no-baseline.png" class="d-inline-block" alt="Morello-HAT" id="logo">
+          </a>
+        </div>
+
+        <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarNavDropdown" aria-controls="navbarNavDropdown" aria-expanded="false" aria-label="Toggle navigation">
+          <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarNavDropdown">
+          <ul class="navbar-nav" id="nav-inner">
+            <li class="nav-item"> <a class="nav-link" href="../">Home</a></li>
+            <li class="nav-item"> <a class="nav-link" href="../about.html">About</a></li>
+            <li class="nav-item"> <a class="nav-link" href="../contact.html">Contact</a></li>
+            <li class="nav-item"> <a class="nav-link" href="../posts.html">Posts</a></li>
+          </ul>
+        </div>
+      </div>
+    </nav>
+  </header>
+
+  <main role="main" class="container container-fluid">
+    <div class="content">
+      <h1>Towards a better memory management API - Part 2</h1>
+      <div class="info">
+    Posted on May 18, 2024
+    
+        by Cristian Urlea
+    
+</div>
+
+<h2 id="abstract">Abstract</h2>
+<p>Currently, the Morello stack supports C and C++ and as such, the capability API is very low-level and pointer-oriented. There are, however, many promising modern languages with fast-growing popularity (e.g. Go, Rust, Dart, etc.) that are not pointer-based and have different type systems and memory management strategies.</p>
+<p>This raises the question of how to best support such languages such languages on CHERI-extended architectures, and in particular if we can design better APIs for memory management such that these languages can make better use of CHERI capabilities.</p>
+<p>In this post we investigate the current approaches to memory allocation in slightly more detail, and explore some options for designing a better, more intentional, memory management API.</p>
+<h2 id="memory-management-automation-continued">Memory Management Automation (Continued)</h2>
+<p>In the first part we briefly touched upon Garbage Collection, Resource Acquisition Is Initialization (RAII) and reference counting, techniques used to automatically manage heap memory. Comparing these to stack allocation, we note that such techniques are more complicated to use. There are in fact middle-of-the-road solutions that leverage the structure of stack allocation and deallocation to simplify heap management.</p>
+<!-- https://doc.rust-lang.org/std/boxed/index.html -->
+<p>The first of these is the <code>Box&lt;T&gt;</code> standard library type which provides the simplest form of heap allocation. A <code>Box&lt;T&gt;</code> serves as a reference to a value of type <code>T</code>, and can be obtained through a call to <code>Box::new(value)</code>. The returned reference ensures the associated memory is freed whenever it goes out of scope by implementing the <strong>Drop</strong> trait. The lifetime of a boxed value can be extended beyond the initial scope through Rust’s <strong>Move Semantics</strong>.</p>
+<!-- A significant limitation pertaining to boxed values is that the reference to the value is unique, meaning there can only -->
+<!-- boxed are aligned and will be freed by the global allocator discussed later  -->
+<!-- In this part we continue... -->
+<!-- https://doc.rust-lang.org/std/mem/union.MaybeUninit.html -->
+<!-- MaybeUninit<T> -->
+<h2 id="rust-allocator-api">Rust Allocator API</h2>
+<p>The Rust programming language is in certain ways quite modular and configurable. For example, custom memory allocators can plugged in and used even within standard library code, by registering them as the <code>default global allocator</code>. Such allocators must implement the <code>GlobalAlloc</code> and <code>Allocator</code> APIs.</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode rust"><code class="sourceCode rust"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">unsafe</span> <span class="kw">trait</span> <span class="bu">GlobalAlloc</span> <span class="op">{</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Required methods</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">unsafe</span> <span class="kw">fn</span> alloc(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> layout<span class="op">:</span> Layout) <span class="op">-&gt;</span> <span class="op">*</span><span class="kw">mut</span> <span class="dt">u8</span><span class="op">;</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">unsafe</span> <span class="kw">fn</span> dealloc(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> ptr<span class="op">:</span> <span class="op">*</span><span class="kw">mut</span> <span class="dt">u8</span><span class="op">,</span> layout<span class="op">:</span> Layout)<span class="op">;</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Provided methods</span></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">unsafe</span> <span class="kw">fn</span> alloc_zeroed(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> layout<span class="op">:</span> Layout) <span class="op">-&gt;</span> <span class="op">*</span><span class="kw">mut</span> <span class="dt">u8</span> <span class="op">{</span> <span class="op">...</span> <span class="op">}</span></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">unsafe</span> <span class="kw">fn</span> realloc(</span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a>        <span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span></span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a>        ptr<span class="op">:</span> <span class="op">*</span><span class="kw">mut</span> <span class="dt">u8</span><span class="op">,</span></span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a>        layout<span class="op">:</span> Layout<span class="op">,</span></span>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a>        new_size<span class="op">:</span> <span class="dt">usize</span></span>
+<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a>    ) <span class="op">-&gt;</span> <span class="op">*</span><span class="kw">mut</span> <span class="dt">u8</span> <span class="op">{</span> <span class="op">...</span> <span class="op">}</span></span>
+<span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<center>
+<b>Listing 1. </b> GlobalAlloc API.
+</center>
+<p>The <code>GlobalAlloc</code> API corresponds to the usual memory allocation API we’re all used to in C/C++, consisting of <code>malloc()</code>, <code>calloc()</code>, <code>realloc()</code> and <code>free()</code>.</p>
+<h3 id="the-allocator-trait">The Allocator Trait</h3>
+<p>The newer <code>Allocator</code> trait brings a number of improvements, such as providing different methods to <code>grow()</code> and <code>shrink()</code> an allocation instead of an amalgamated <code>realloc()</code> method.</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode rust"><code class="sourceCode rust"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">unsafe</span> <span class="kw">trait</span> Allocator <span class="op">{</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Required methods</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> allocate(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> layout<span class="op">:</span> Layout) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>NonNull<span class="op">&lt;</span>[<span class="dt">u8</span>]<span class="op">&gt;,</span> AllocError<span class="op">&gt;;</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">unsafe</span> <span class="kw">fn</span> deallocate(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> ptr<span class="op">:</span> NonNull<span class="op">&lt;</span><span class="dt">u8</span><span class="op">&gt;,</span> layout<span class="op">:</span> Layout)<span class="op">;</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Provided methods</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> allocate_zeroed(</span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>        <span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span></span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>        layout<span class="op">:</span> Layout</span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a>    ) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>NonNull<span class="op">&lt;</span>[<span class="dt">u8</span>]<span class="op">&gt;,</span> AllocError<span class="op">&gt;</span> <span class="op">{</span> <span class="op">...</span> <span class="op">}</span></span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a>    <span class="kw">unsafe</span> <span class="kw">fn</span> grow(</span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a>        <span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span></span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a>        ptr<span class="op">:</span> NonNull<span class="op">&lt;</span><span class="dt">u8</span><span class="op">&gt;,</span></span>
+<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a>        old_layout<span class="op">:</span> Layout<span class="op">,</span></span>
+<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a>        new_layout<span class="op">:</span> Layout</span>
+<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a>    ) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>NonNull<span class="op">&lt;</span>[<span class="dt">u8</span>]<span class="op">&gt;,</span> AllocError<span class="op">&gt;</span> <span class="op">{</span> <span class="op">...</span> <span class="op">}</span></span>
+<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a>    <span class="kw">unsafe</span> <span class="kw">fn</span> grow_zeroed(</span>
+<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a>        <span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span></span>
+<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a>        ptr<span class="op">:</span> NonNull<span class="op">&lt;</span><span class="dt">u8</span><span class="op">&gt;,</span></span>
+<span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a>        old_layout<span class="op">:</span> Layout<span class="op">,</span></span>
+<span id="cb2-21"><a href="#cb2-21" aria-hidden="true" tabindex="-1"></a>        new_layout<span class="op">:</span> Layout</span>
+<span id="cb2-22"><a href="#cb2-22" aria-hidden="true" tabindex="-1"></a>    ) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>NonNull<span class="op">&lt;</span>[<span class="dt">u8</span>]<span class="op">&gt;,</span> AllocError<span class="op">&gt;</span> <span class="op">{</span> <span class="op">...</span> <span class="op">}</span></span>
+<span id="cb2-23"><a href="#cb2-23" aria-hidden="true" tabindex="-1"></a>    <span class="kw">unsafe</span> <span class="kw">fn</span> shrink(</span>
+<span id="cb2-24"><a href="#cb2-24" aria-hidden="true" tabindex="-1"></a>        <span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span></span>
+<span id="cb2-25"><a href="#cb2-25" aria-hidden="true" tabindex="-1"></a>        ptr<span class="op">:</span> NonNull<span class="op">&lt;</span><span class="dt">u8</span><span class="op">&gt;,</span></span>
+<span id="cb2-26"><a href="#cb2-26" aria-hidden="true" tabindex="-1"></a>        old_layout<span class="op">:</span> Layout<span class="op">,</span></span>
+<span id="cb2-27"><a href="#cb2-27" aria-hidden="true" tabindex="-1"></a>        new_layout<span class="op">:</span> Layout</span>
+<span id="cb2-28"><a href="#cb2-28" aria-hidden="true" tabindex="-1"></a>    ) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>NonNull<span class="op">&lt;</span>[<span class="dt">u8</span>]<span class="op">&gt;,</span> AllocError<span class="op">&gt;</span> <span class="op">{</span> <span class="op">...</span> <span class="op">}</span></span>
+<span id="cb2-29"><a href="#cb2-29" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> by_ref(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="op">&amp;</span><span class="dt">Self</span></span>
+<span id="cb2-30"><a href="#cb2-30" aria-hidden="true" tabindex="-1"></a>       <span class="kw">where</span> <span class="dt">Self</span><span class="op">:</span> <span class="bu">Sized</span> <span class="op">{</span> <span class="op">...</span> <span class="op">}</span></span>
+<span id="cb2-31"><a href="#cb2-31" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<center>
+<b>Listing 2. </b> Allocator API.
+</center>
+<p>Another important improvement is that the <code>Allocator</code> trait now gives us a way to safely grow an allocation without having to worry about tainted memory using <code>grow_zeroed()</code>.</p>
+<p>Notice that the standard allocator functions also take <code>Layout</code> parameters that specify the size and alignment requirements for the allocations that are to be created, and crucially, those that are to be modified as well.</p>
+<!-- https://doc.rust-lang.org/std/alloc/trait.Allocator.html -->
+<div class="sourceCode" id="cb3"><pre class="sourceCode rust"><code class="sourceCode rust"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> Layout <span class="op">{</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">// size of the requested block of memory, measured in bytes.</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>    size<span class="op">:</span> <span class="dt">usize</span><span class="op">,</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>    <span class="co">// alignment of the requested block of memory, measured in bytes.</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>    <span class="co">// we ensure that this is always a power-of-two [...]</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>    align<span class="op">:</span> Alignment<span class="op">,</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>This showcases the use of an important security and safety principle: that of intentionality. The requirement that we pass a <code>Layout</code> parameter when deallocation memory makes it less likely that the programmer will attempt to de-allocate using a pointer that was not sourced from the same allocator: a pointer could be sourced from just about anywhere, whereas an accompanying <code>Layout</code> value will most likely come from the same area of code where the memory was initially allocated.</p>
+<p>Taking a closer look at the Allocator API we notice more safety features. The <code>Result&lt;NonNull&lt;[u8]&gt;, AllocError&gt;</code> return type for <code>allocate()</code> indicates that memory allocation can only lead to one of two mutually-exclusive scenarios:</p>
+<ol type="1">
+<li>Allocation is successful, in which case the resulting pointer can not be the <em>null pointer</em>.</li>
+<li>An error occurs, in which case a value of tpe <code>AllocError</code> is returned.</li>
+</ol>
+<p>In a similar fashion, the <code>deallocate()</code> method requires a non-null pointer as a parameter, indicating that only valid allocations can be deallocated.</p>
+<h3 id="going-further-with-cheri">Going further with CHERI</h3>
+<p>On CHERI-extended hardware architectures, capability pointers encode information that is normally conveyed through both the pointer (<code>*mut u8</code>) and the layout (<code>Layout</code>) types. This state of fact brings with it a series of opportunities and challenges in relation to the memory allocation API.</p>
+<p>Neglecting non-cheri platforms and some of the finer points around alignment for a moment, the <code>Allocator</code> trait could be greatly simplified. Methods such as <code>deallocate()</code> and <code>shrink()</code> that currently take <code>Layout</code> parameter which specifies the size of the allocation which is to be modified could simply take in a capability pointer. This brings with it additional safety in that capability pointers can not be forged, unlike <code>Layout</code> values which can be constructed by calling <code>from_size_align(size:usize, align:usize)</code>.</p>
+<p>Another safety improvement to the API, although one that wouldn’t necessarily have an impact of the method signature, is that the <code>shrink()</code> method taking a capability pointer as an argument would be guaranteed to return a capability pointer with smaller (or equal but not greater) bounds, simply by virtue of how capability pointers operate. The related <code>grow()</code> method would require a signature change: the addition of a further capability pointer parameter authorizing the change.</p>
+<p>The changes suggested thus far relate only to the most trivial of use-cases. The most significant limitation related to CHERI capability pointers is that pointer revocation is costly in terms of performance. With the current memory allocation API, once read access is granted to a capability pointer, if malicious code stashes away copies of that capability pointer, the only resolution is to <em>stop the world</em> and <em>scan large areas of memory</em> with the aim of manually invalidating any such copies. With a little more creative freedom applied to the allocation API, this does not have to be the case. Let us consider the addition of more specialized methods such as <code>allocate_nocaps()</code>.</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode rust"><code class="sourceCode rust"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">unsafe</span> <span class="kw">trait</span> Allocator <span class="op">{</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>    <span class="co">// [...]</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> allocate_nocaps(</span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>        <span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>        layout<span class="op">:</span> Layout</span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>    ) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>NoCaps<span class="op">&lt;</span>[<span class="dt">u8</span>]<span class="op">&gt;,</span> AllocError<span class="op">&gt;</span> <span class="op">{</span> <span class="op">...</span> <span class="op">};</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>    <span class="co">// [...]</span></span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<center>
+<b>Listing 3. </b> Allocator API addition: <code>allocate_nocaps()</code>.
+</center>
+<p>The addition of an <code>allocate_nocaps()</code> method that returns a capability pointer lacking the <code>StoreCap</code> and <code>LoadCap</code> permissions would enable secure software implementations to safely exclude regions of memory from the capability scanning operation during capability revocation. Exposing the lack of such permissions through Rust’s type system indicated by the hypothetical <code>NoCaps</code> type would further strengthen reasoning about such allocations.</p>
+<p>Another non-trivial use-case that warrants closer attention has to do with memory that could potentially hold sensitive information. Current memory allocation APIs provide methods such as <code>allocate_zeroed()</code> which provide <em>integrity</em> by ensuring that memory is zeroed before use. The <em>dual</em> case which requires that memory must be cleared before it is returned to the system, to ensure <em>privacy</em> is simply not catered for. Addressing this situation would perhaps require two new methods and some additional type information.</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode rust"><code class="sourceCode rust"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">unsafe</span> <span class="kw">trait</span> Allocator <span class="op">{</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">// [...]</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">unsafe</span> <span class="kw">fn</span> deallocate(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> ptr<span class="op">:</span> NonNull<span class="op">&lt;</span><span class="dt">u8</span><span class="op">&gt;,</span> layout<span class="op">:</span> Layout)<span class="op">;</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>    <span class="co">// [...]</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> allocate_mustzero(</span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>        <span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span></span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>        layout<span class="op">:</span> Layout</span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a>    ) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>MustZero<span class="op">&lt;</span>[<span class="dt">u8</span>]<span class="op">&gt;,</span> AllocError<span class="op">&gt;</span> <span class="op">{</span> <span class="op">...</span> <span class="op">};</span></span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a>    <span class="kw">unsafe</span> <span class="kw">fn</span> deallocate_zeroed(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> ptr<span class="op">:</span> MustZero<span class="op">&lt;</span><span class="dt">u8</span><span class="op">&gt;,</span> layout<span class="op">:</span> Layout)<span class="op">;</span></span>
+<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a>    <span class="co">// [...]</span></span>
+<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<center>
+<b>Listing 4. </b> Allocator API addition: <code>allocate_mustzero()</code> and <code>deallocate_zero()</code>.
+</center>
+<p>The reasoning here is that a new <code>allocate_mustzero()</code> method would return an allocation of type <code>MustZero</code> making it impossible to free the allocation through the usual <code>deallocate()</code> method. Instead, the newly added <code>deallocate_zeroed()</code> method which accepts a <code>MustZero</code> allocation parameter would have to be called, ensuring that memory is zeroed out before it is returned to the system.</p>
+<h2 id="behavioral-types">Behavioral Types</h2>
+<p>In the following post we will go over some of the basics of behavioral types and their encoding in the Rust language to see how further performance and security benefits could be derived.</p>
+<p>With a view to that future, let us consider a motivating scenario where a client application makes liberal use of both the existing <code>allocate_zeroed()</code> method as well as the newly proposed <code>deallocate_zeroed()</code>. Clearly it would be wasteful to zero out memory, upon allocation, if said memory can be guaranteed to have been zeroed out previously, during a deallocation event.</p>
+<p>Optimizing for such scenarios, however, requires more drastic changes to the memory allocation API.</p>
+
+    </div>
+  </main>
+
+  <footer class="footer py-4 py-md-5 mt-5 bg-light">
+    <div class="container py-4 py-md-5 px-4 px-md-3">
+      <div class="row">
+
+        <div class="col-sm-6 col-12 m-auto">
+          Morello-HAT is
+          <a href="https://gow.epsrc.ukri.org/NGBOViewGrant.aspx?GrantRef=EP/X015955/1" target="_blank">
+            funded by UKRI-EPSRC
+          </a> as part of
+          <a href="https://www.dsbd.tech/" target="_blank">
+            Digital Security by Design
+          </a>
+        </div>
+
+        <div class="col-sm-3 col-6 m-auto">
+          <a class="d-inline-flex align-items-center mb-2" href="https://www.ukri.org/councils/epsrc/">
+            <img class="style-logo" src="../logos/ukri-logo.png" alt="ukri Logo">
+          </a>
+        </div>
+
+      </div>
+    </div>
+  </footer>
+
+
+  <script src="https://code.jquery.com/jquery-3.3.1.slim.min.js" integrity="sha384-q8i/X+965DzO0rT7abK41JStQIAqVgRVzpbzo5smXKp4YfRvH+8abtTE1Pi6jizo" crossorigin="anonymous"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.14.6/umd/popper.min.js" integrity="sha384-wHAiFfRlMFy6i5SRaxvfOCifBUQy1xHdJ/yoi7FRNXMRBu5WHdZYu1hA6ZOblgut" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.2/dist/js/bootstrap.bundle.min.js" integrity="sha384-OERcA2EqjJCMA+/3y+gxIOqMEjwtxJY7qPCqsdltbNJuaOe923+mo//f6V8Qbsw3" crossorigin="anonymous"></script>
+</body>
+
+</html>
